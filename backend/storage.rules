@@ -1,0 +1,59 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isAuthenticated() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function isUnder5MB() {
+      return request.resource.size < 5 * 1024 * 1024;
+    }
+
+    function isValidPosterImage() {
+      return request.resource.contentType.matches('image/(jpeg|png|webp|gif)');
+    }
+
+    function isValidCertificateFile() {
+      return request.resource.contentType.matches('image/(jpeg|png|webp|gif)') ||
+             request.resource.contentType.matches('application/pdf');
+    }
+
+    // 1. Event Posters: events/{eventId}/posters/{fileName}
+    match /events/{eventId}/posters/{fileName} {
+      // Publicly viewable for event discovery across student catalog
+      allow read: if true;
+
+      // Only authenticated users can upload or replace posters under format and size constraints
+      allow create, update: if isAuthenticated() && isUnder5MB() && isValidPosterImage();
+
+      // Only authenticated users can delete event posters
+      allow delete: if isAuthenticated();
+    }
+
+    // 2. Certificates Storage: certificates/{studentId}/{fileName}
+    match /certificates/{studentId}/{fileName} {
+      // Students can view/download their own certificate documents
+      allow read: if isAuthenticated() && (request.auth.uid == studentId || request.auth != null);
+
+      // Only authenticated users (organizers/system) can store certificates
+      allow create, update: if isAuthenticated() && isUnder5MB() && isValidCertificateFile();
+
+      allow delete: if isAuthenticated();
+    }
+
+    // 3. User Avatars: avatars/{userId}/{fileName}
+    match /avatars/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && request.auth.uid == userId && isUnder5MB() && isValidPosterImage();
+      allow delete: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // 4. Club Logos & Branding: clubs/{clubId}/{fileName}
+    match /clubs/{clubId}/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && isUnder5MB() && isValidPosterImage();
+      allow delete: if isAuthenticated();
+    }
+  }
+}

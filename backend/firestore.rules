@@ -1,0 +1,199 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ----------------------------------------------------
+    // Global Helper & Authentication Functions
+    // ----------------------------------------------------
+    function isAuthenticated() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function getUserRole() {
+      return isAuthenticated() ? getUserData().role : null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && getUserRole() == 'admin';
+    }
+
+    function isOrganizer() {
+      return isAuthenticated() && (getUserRole() == 'organizer' || isAdmin());
+    }
+
+    function isStudent() {
+      return isAuthenticated() && getUserRole() == 'student';
+    }
+
+    // ----------------------------------------------------
+    // 1. Users Collection (/users/{userId})
+    // ----------------------------------------------------
+    match /users/{userId} {
+      // Authenticated users can read directory profiles
+      allow read: if isAuthenticated();
+
+      // Signups must only create a profile for themselves and default to 'student' role
+      allow create: if isOwner(userId) && (
+        request.resource.data.role == 'student' || isAdmin()
+      ) &&
+      request.resource.data.name is string &&
+      request.resource.data.email is string;
+
+      // Users can update their own personal info (name, department, year, photoURL, bio),
+      // but PREVENT TAMPERING with 'role', 'uid', 'email', or 'createdAt'.
+      allow update: if (
+        isOwner(userId) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'uid', 'email', 'createdAt'])
+      ) || isAdmin();
+
+      // Only the user account owner or an admin can delete their profile
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    // ----------------------------------------------------
+    // 2. Events Collection (/events/{eventId})
+    // ----------------------------------------------------
+    match /events/{eventId} {
+      // Published events are visible to all students and public visitors.
+      // Draft and cancelled events are visible only to the creator organizer or admins.
+      allow read: if resource.data.status == 'published' ||
+                     (isAuthenticated() && (resource.data.organizerId == request.auth.uid || isAdmin()));
+
+      // Only authorized organizers and admins can create events under their own organizer ID
+      allow create: if isOrganizer() && (
+        request.resource.data.organizerId == request.auth.uid || isAdmin()
+      ) &&
+      request.resource.data.title is string &&
+      request.resource.data.title.size() >= 3 &&
+      request.resource.data.status in ['draft', 'published', 'cancelled', 'completed'] &&
+      request.resource.data.capacity is int &&
+      request.resource.data.capacity >= 1;
+
+      // Organizers can ONLY edit or cancel their own events; admins can manage all events.
+      // Authenticated students are granted atomic seat counter adjustments during registrations.
+      allow update: if (
+        // Case A: Owning organizer editing their own event listing (cannot transfer organizerId)
+        isOrganizer() && (
+          (resource.data.organizerId == request.auth.uid && request.resource.data.organizerId == resource.data.organizerId) ||
+          isAdmin()
+        ) &&
+        request.resource.data.status in ['draft', 'published', 'cancelled', 'completed']
+      ) || (
+        // Case B: Concurrency-safe atomic registration counter adjustment by authenticated students
+        isAuthenticated() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['registeredCount', 'updatedAt']) &&
+        request.resource.data.registeredCount is int &&
+        request.resource.data.registeredCount >= 0 &&
+        request.resource.data.registeredCount <= resource.data.capacity
+      );
+
+      // Only the owning organizer or an admin can delete an event
+      allow delete: if isOrganizer() && (resource.data.organizerId == request.auth.uid || isAdmin());
+    }
+
+    // ----------------------------------------------------
+    // 3. Registrations Collection (/registrations/{registrationId})
+    // ----------------------------------------------------
+    match /registrations/{registrationId} {
+      // Privacy & Isolation:
+      // - Students can ONLY view their own passes (studentId == request.auth.uid).
+      // - Organizers can ONLY view participants for events they host.
+      // - Organizers CANNOT view unrelated participants of other clubs.
+      allow read: if isAuthenticated() && (
+        resource.data.studentId == request.auth.uid ||
+        isAdmin() ||
+        (
+          isOrganizer() &&
+          get(/databases/$(database)/documents/events/$(resource.data.eventId)).data.organizerId == request.auth.uid
+        )
+      );
+
+      // Registration Creation:
+      // - Authenticated students can register only for their own UID.
+      // - Must begin with status 'registered' and gate check-in 'notMarked'.
+      allow create: if isAuthenticated() && (
+        request.resource.data.studentId == request.auth.uid &&
+        request.resource.data.eventId is string &&
+        request.resource.data.status in ['registered', 'waitlisted'] &&
+        request.resource.data.attendanceStatus == 'notMarked' &&
+        request.resource.data.checkedIn == false
+      );
+
+      // Registration Updates & Gate Attendance Control:
+      allow update: if isAuthenticated() && (
+        // Branch 1: Student cancelling their own pass
+        // Students are restricted to updating ONLY status to 'cancelled' and cannot mark attendance!
+        (
+          resource.data.studentId == request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt', 'updatedAt']) &&
+          request.resource.data.status == 'cancelled'
+        ) ||
+        // Branch 2: Host organizer updating attendance & gate check-in
+        // STUDENTS CANNOT MARK THEMSELVES PRESENT! Only host organizer or admin can.
+        (
+          (
+            isAdmin() ||
+            (isOrganizer() && get(/databases/$(database)/documents/events/$(resource.data.eventId)).data.organizerId == request.auth.uid)
+          ) &&
+          request.resource.data.attendanceStatus in ['present', 'absent', 'notMarked']
+        )
+      );
+
+      // Deletion allowed only by registered student or system admin
+      allow delete: if isAuthenticated() && (
+        resource.data.studentId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    // ----------------------------------------------------
+    // 4. Notifications Collection (/notifications/{notificationId})
+    // ----------------------------------------------------
+    match /notifications/{notificationId} {
+      // Users can only read, update, or delete notifications where they are the recipient
+      allow read: if isAuthenticated() && resource.data.recipientId == request.auth.uid;
+
+      // Users can only mark their own notifications as read
+      allow update: if isAuthenticated() &&
+                    resource.data.recipientId == request.auth.uid &&
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt', 'updatedAt']);
+
+      allow delete: if isAuthenticated() && (
+        resource.data.recipientId == request.auth.uid || isAdmin()
+      );
+
+      // Authenticated users and organizers can push system notifications
+      allow create: if isAuthenticated() &&
+                    request.resource.data.recipientId is string &&
+                    request.resource.data.title is string;
+    }
+
+    // ----------------------------------------------------
+    // 5. Certificates Collection (/certificates/{certificateId})
+    // ----------------------------------------------------
+    match /certificates/{certificateId} {
+      // Students can ONLY read their own certificates.
+      // Organizers can read certificates for events they host; Admins can read all.
+      allow read: if isAuthenticated() && (
+        resource.data.studentId == request.auth.uid ||
+        isAdmin() ||
+        (
+          isOrganizer() &&
+          get(/databases/$(database)/documents/events/$(resource.data.eventId)).data.organizerId == request.auth.uid
+        )
+      );
+
+      // ONLY authorized organizers and admins can issue, modify, or revoke certificates.
+      // STUDENTS ARE STRICTLY PREVENTED FROM ISSUING OR MODIFYING THEIR OWN CERTIFICATES!
+      allow create, update, delete: if isOrganizer() || isAdmin();
+    }
+  }
+}

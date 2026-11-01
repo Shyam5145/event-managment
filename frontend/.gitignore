@@ -1,0 +1,14 @@
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+dist-ssr/
+*.local
+

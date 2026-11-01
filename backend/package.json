@@ -1,0 +1,15 @@
+{
+  "name": "campuspulse-backend",
+  "version": "1.0.0",
+  "description": "CampusPulse Event Management Platform - Firebase Security Rules, Indexes & Cloud Functions",
+  "type": "module",
+  "keywords": [
+    "campuspulse",
+    "firebase",
+    "firestore",
+    "storage",
+    "cloud-functions"
+  ],
+  "author": "CampusPulse Team",
+  "license": "MIT"
+}

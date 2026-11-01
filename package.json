@@ -1,0 +1,35 @@
+{
+  "name": "campuspulse-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CampusPulse - Modern College Event Management Platform (Firebase Serverless Architecture)",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "preview": "npm --prefix frontend run preview",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build:frontend": "npm --prefix frontend run build",
+    "test": "node test_phase11_suite.mjs",
+    "test:qr": "node test_qr_passes.mjs",
+    "emulators": "firebase emulators:start",
+    "deploy": "firebase deploy",
+    "deploy:hosting": "firebase deploy --only hosting",
+    "deploy:rules": "firebase deploy --only firestore:rules,storage",
+    "deploy:indexes": "firebase deploy --only firestore:indexes"
+  },
+  "keywords": [
+    "react",
+    "vite",
+    "tailwind",
+    "events",
+    "college",
+    "firebase",
+    "firestore"
+  ],
+  "author": "CampusPulse Team",
+  "license": "MIT"
+}
